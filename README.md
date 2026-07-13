@@ -1,6 +1,6 @@
 # AI Limit Notch
 
-A compact, native macOS Notch overlay for monitoring AI coding-provider limits. The mini view shows provider logos and usage percentages; click it to expand into detailed 5-hour, session, and weekly limits.
+A compact, native macOS Notch overlay for monitoring AI coding-provider limits. The mini view shows provider logos and live 5-hour usage percentages; click it to expand into the available 5-hour and weekly limits.
 
 ## Preview
 

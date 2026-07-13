@@ -3,3 +3,5 @@
 .DS_Store
 DerivedData/
 dist/
+.claude/
+graphify-out/
