@@ -2,6 +2,20 @@
 
 A compact, native macOS Notch overlay for monitoring AI coding-provider limits. The mini view shows provider logos and usage percentages; click it to expand into detailed 5-hour, session, and weekly limits.
 
+## Preview
+
+### Mini Notch
+
+![AI Limit Notch mini view showing Claude Code and Codex usage](docs/images/notch-mini.jpg)
+
+### Expanded limits
+
+![Expanded AI Limit Notch showing provider usage details](docs/images/notch-expanded.jpg)
+
+### Provider settings
+
+![AI Limit Notch provider connection settings](docs/images/settings-connections.jpg)
+
 ## Features
 
 - Native SwiftUI and AppKit interface for macOS 13+
@@ -83,4 +97,3 @@ Usage information is read from local Claude Code and Codex files. The app does n
 ## License
 
 AI Limit Notch is available under the [MIT License](LICENSE).
-
