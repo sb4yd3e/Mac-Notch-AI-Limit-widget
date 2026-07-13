@@ -6,11 +6,11 @@ The app checks this Sparkle feed:
 
 For each release:
 
-1. Build a Developer ID signed and notarized `AILimitNotch.app` with incremented `CFBundleVersion` and `CFBundleShortVersionString` values.
-2. Archive only the app bundle as `AILimitNotch-<version>.zip`.
-3. Sign the archive with Sparkle's EdDSA key and generate `appcast.xml` using Sparkle's `generate_appcast` tool.
+1. Build a Developer ID signed and notarized app with `scripts/package_release.sh <version> <build-number>`.
+2. Confirm the universal app launches from `dist/AI Limit Notch.app`.
+3. Generate the signed appcast with Sparkle's `generate_appcast` tool.
 4. Create a GitHub Release whose tag matches the app version.
-5. Upload both `AILimitNotch-<version>.zip` and `appcast.xml` as release assets.
+5. Upload the versioned zip, checksum, and `appcast.xml` as release assets.
 
 The packaged app's `Info.plist` must include the matching Sparkle public key in `SUPublicEDKey`. Keep the private key outside the repository, preferably in the release CI secret store.
 
