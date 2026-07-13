@@ -48,37 +48,43 @@ enum ProviderID: String, CaseIterable, Identifiable, Codable {
         case .cursor: .blue
         }
     }
+
+    var statusFeedURL: URL? {
+        switch self {
+        case .claudeCode: URL(string: "https://status.claude.com/history.rss")
+        case .codex: URL(string: "https://status.openai.com/feed.rss")
+        case .antigravity, .cursor: nil
+        }
+    }
 }
 
-struct LimitMetric: Identifiable {
+enum ServerStatus: Sendable {
+    case operational
+    case incident
+    case unknown
+
+    var color: Color {
+        switch self {
+        case .operational: .green
+        case .incident: .orange
+        case .unknown: .gray
+        }
+    }
+
+    func label(_ language: String) -> String {
+        switch self {
+        case .operational: language == "th" ? "ปกติ" : "Operational"
+        case .incident: language == "th" ? "มีปัญหา" : "Incident"
+        case .unknown: language == "th" ? "ไม่ทราบสถานะ" : "Unknown"
+        }
+    }
+}
+
+struct LimitMetric: Identifiable, Sendable {
     let id: String
     let label: String
     let usedPercent: Int
     let resetText: String?
-}
-
-extension ProviderID {
-    var limits: [LimitMetric] {
-        switch self {
-        case .claudeCode:
-            [
-                LimitMetric(id: "session", label: "Current session", usedPercent: 0, resetText: nil),
-                LimitMetric(id: "week", label: "Current week (all models)", usedPercent: 38, resetText: "Resets Jul 15 at 1 PM"),
-                LimitMetric(id: "fable", label: "Current week (Fable)", usedPercent: 54, resetText: "Resets Jul 15 at 1 PM")
-            ]
-        case .codex:
-            [
-                LimitMetric(id: "5h", label: "5-hour limit", usedPercent: 22, resetText: "Resets in 2h 14m"),
-                LimitMetric(id: "week", label: "Weekly limit", usedPercent: 1, resetText: "Resets Jul 20")
-            ]
-        case .antigravity:
-            [LimitMetric(id: "5h", label: "5-hour limit", usedPercent: 0, resetText: "Waiting for connection")]
-        case .cursor:
-            [LimitMetric(id: "usage", label: "Plan usage", usedPercent: 0, resetText: "Waiting for connection")]
-        }
-    }
-
-    var primaryMiniLimit: LimitMetric { limits.first(where: { $0.id == "5h" }) ?? limits[0] }
 }
 
 @MainActor
@@ -182,16 +188,7 @@ final class UsageStore: ObservableObject {
     }
 
     func limits(for provider: ProviderID) -> [LimitMetric] {
-        guard let live = liveLimits[provider] else { return provider.limits }
-        var merged = provider.limits
-        for metric in live {
-            if let index = merged.firstIndex(where: { $0.id == metric.id }) {
-                merged[index] = metric
-            } else {
-                merged.append(metric)
-            }
-        }
-        return merged
+        liveLimits[provider] ?? []
     }
 
     func isLive(_ provider: ProviderID) -> Bool {
@@ -199,15 +196,23 @@ final class UsageStore: ObservableObject {
     }
 
     func refresh() {
-        if let codex = Self.readLatestCodexLimits() {
-            liveLimits[.codex] = codex
-        }
-        if let claude = Self.readClaudeStatusLineCache() {
-            liveLimits[.claudeCode] = claude
+        Task.detached(priority: .utility) {
+            let codex = Self.readLatestCodexLimits()
+            let claude = Self.readClaudeStatusLineCache()
+            await MainActor.run { [weak self] in
+                self?.apply(codex: codex, claude: claude)
+            }
         }
     }
 
-    private static func readLatestCodexLimits() -> [LimitMetric]? {
+    private func apply(codex: [LimitMetric]?, claude: [LimitMetric]?) {
+        liveLimits[.codex] = codex        // assigning nil removes the key
+        liveLimits[.claudeCode] = claude
+        liveLimits.removeValue(forKey: .antigravity)
+        liveLimits.removeValue(forKey: .cursor)
+    }
+
+    private nonisolated static func readLatestCodexLimits() -> [LimitMetric]? {
         let root = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".codex/sessions", isDirectory: true)
         guard let enumerator = FileManager.default.enumerator(
@@ -230,7 +235,9 @@ final class UsageStore: ObservableObject {
         let end = (try? handle.seekToEnd()) ?? 0
         let start = end > 2_000_000 ? end - 2_000_000 : 0
         try? handle.seek(toOffset: start)
-        guard let data = try? handle.readToEnd(), let text = String(data: data, encoding: .utf8) else { return nil }
+        guard let data = try? handle.readToEnd() else { return nil }
+        // Tail read may start mid-character; decode lossily so a split UTF-8 byte doesn't drop the whole file.
+        let text = String(decoding: data, as: UTF8.self)
 
         var found: [String: LimitMetric] = [:]
         for line in text.split(separator: "\n").reversed().prefix(800) {
@@ -258,7 +265,7 @@ final class UsageStore: ObservableObject {
         return result.isEmpty ? nil : result
     }
 
-    private static func readClaudeStatusLineCache() -> [LimitMetric]? {
+    private nonisolated static func readClaudeStatusLineCache() -> [LimitMetric]? {
         let url = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/AILimitNotch/claude-usage.json")
         guard let data = try? Data(contentsOf: url),
@@ -266,7 +273,7 @@ final class UsageStore: ObservableObject {
               let rateLimits = root["rate_limits"] as? [String: Any] else { return nil }
 
         let definitions = [("five_hour", "5h", "5-hour limit"), ("seven_day", "week", "Weekly limit")]
-        return definitions.compactMap { source, id, label in
+        let result: [LimitMetric] = definitions.compactMap { source, id, label in
             guard let window = rateLimits[source] as? [String: Any],
                   let used = (window["used_percentage"] as? NSNumber)?.doubleValue else { return nil }
             return LimitMetric(
@@ -276,13 +283,67 @@ final class UsageStore: ObservableObject {
                 resetText: resetText(window["resets_at"])
             )
         }
+        return result.isEmpty ? nil : result
     }
 
-    private static func resetText(_ raw: Any?) -> String? {
+    private nonisolated static func resetText(_ raw: Any?) -> String? {
         guard let timestamp = (raw as? NSNumber)?.doubleValue else { return nil }
         let formatter = DateFormatter()
         formatter.dateFormat = "MMM d, h:mm a"
         return "Resets " + formatter.string(from: Date(timeIntervalSince1970: timestamp))
+    }
+}
+
+@MainActor
+final class StatusStore: ObservableObject {
+    static let shared = StatusStore()
+
+    @Published private(set) var statuses: [ProviderID: ServerStatus] = [:]
+    private var timer: Timer?
+
+    private init() {
+        refresh()
+        // Status pages change slowly; poll every 5 minutes.
+        timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refresh() }
+        }
+    }
+
+    func status(for provider: ProviderID) -> ServerStatus {
+        statuses[provider] ?? .unknown
+    }
+
+    func refresh() {
+        for provider in ProviderID.allCases {
+            guard let url = provider.statusFeedURL else { continue }
+            Task { [weak self] in
+                let status = await Self.fetchStatus(url)
+                self?.statuses[provider] = status
+            }
+        }
+    }
+
+    // Both feeds list incidents newest-first. The newest incident's earliest status
+    // keyword is its current state: "Resolved" means the page is operational again,
+    // anything else means an incident is still open.
+    private nonisolated static func fetchStatus(_ url: URL) async -> ServerStatus {
+        guard let (data, _) = try? await URLSession.shared.data(from: url) else { return .unknown }
+        let xml = String(decoding: data, as: UTF8.self)
+        guard let itemStart = xml.range(of: "<item>") else { return .unknown }
+        let tail = xml[itemStart.upperBound...]
+        let item = tail.range(of: "</item>").map { String(tail[..<$0.lowerBound]) } ?? String(tail)
+        let lower = item.lowercased()
+
+        var earliest: (index: Int, resolved: Bool)?
+        for (keyword, resolved) in [("resolved", true), ("investigating", false), ("identified", false), ("monitoring", false)] {
+            guard let range = lower.range(of: keyword) else { continue }
+            let index = lower.distance(from: lower.startIndex, to: range.lowerBound)
+            if earliest == nil || index < earliest!.index {
+                earliest = (index, resolved)
+            }
+        }
+        guard let earliest else { return .unknown }
+        return earliest.resolved ? .operational : .incident
     }
 }
 

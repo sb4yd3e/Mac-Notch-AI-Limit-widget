@@ -5,6 +5,7 @@ struct NotchView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var state: NotchState
     @ObservedObject private var usage = UsageStore.shared
+    @ObservedObject private var serverStatus = StatusStore.shared
 
     let onExpansionChanged: (Bool) -> Void
 
@@ -33,7 +34,7 @@ struct NotchView: View {
                         .frame(width: 11, height: 11)
                         .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
 
-                    Text("\(miniMetric(for: provider).usedPercent)%")
+                    Text(miniValue(for: provider))
                         .font(.sukhumvit(10, weight: .medium))
                         .monospacedDigit()
                         .foregroundStyle(.white.opacity(0.9))
@@ -57,6 +58,7 @@ struct NotchView: View {
                     ProviderLimitSection(
                         provider: provider,
                         metrics: usage.limits(for: provider),
+                        status: serverStatus.status(for: provider),
                         language: settings.language,
                         monochrome: settings.isMonochrome
                     )
@@ -89,15 +91,19 @@ struct NotchView: View {
         onExpansionChanged(state.isExpanded)
     }
 
-    private func miniMetric(for provider: ProviderID) -> LimitMetric {
+    private func miniValue(for provider: ProviderID) -> String {
         let metrics = usage.limits(for: provider)
-        return metrics.first(where: { $0.id == "5h" }) ?? metrics[0]
+        guard let metric = metrics.first(where: { $0.id == "5h" }) ?? metrics.first else {
+            return "—"
+        }
+        return "\(metric.usedPercent)%"
     }
 }
 
 private struct ProviderLimitSection: View {
     let provider: ProviderID
     let metrics: [LimitMetric]
+    let status: ServerStatus
     let language: String
     let monochrome: Bool
 
@@ -112,6 +118,17 @@ private struct ProviderLimitSection: View {
                     .font(.sukhumvit(12, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.9))
                 Spacer()
+                if status != .unknown {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(monochrome ? .white : status.color)
+                            .frame(width: 6, height: 6)
+                        Text(status.label(language))
+                            .font(.sukhumvit(9, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+                    .help(status.label(language))
+                }
             }
 
             ForEach(Array(metrics.enumerated()), id: \.element.id) { index, metric in
@@ -121,6 +138,12 @@ private struct ProviderLimitSection: View {
                     fillOpacity: monochrome ? [0.95, 0.70, 0.48][min(index, 2)] : 1,
                     language: language
                 )
+            }
+
+            if metrics.isEmpty {
+                Text(language == "th" ? "ไม่มีข้อมูล" : "No data")
+                    .font(.sukhumvit(10))
+                    .foregroundStyle(.white.opacity(0.46))
             }
         }
     }
@@ -167,12 +190,8 @@ private struct LimitRow: View {
     private var localizedLabel: String {
         guard language == "th" else { return metric.label }
         switch metric.label {
-        case "Current session": return "เซสชันปัจจุบัน"
-        case "Current week (all models)": return "สัปดาห์นี้ (ทุกโมเดล)"
-        case "Current week (Fable)": return "สัปดาห์นี้ (Fable)"
         case "5-hour limit": return "ลิมิต 5 ชั่วโมง"
         case "Weekly limit": return "ลิมิตรายสัปดาห์"
-        case "Plan usage": return "การใช้งานแพ็กเกจ"
         default: return metric.label
         }
     }

@@ -40,6 +40,13 @@ A compact, native macOS Notch overlay for monitoring AI coding-provider limits. 
 
 Codex data is read locally from `~/.codex/sessions` and refreshed every 20 seconds.
 
+The expanded view also shows each provider's server status, derived from the official status feeds and refreshed every 5 minutes:
+
+```text
+Claude Code  https://status.claude.com/history.rss
+Codex        https://status.openai.com/feed.rss
+```
+
 Claude Code reads the official `rate_limits.five_hour` and `rate_limits.seven_day` values from:
 
 ```text
