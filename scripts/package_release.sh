@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-0.1.1}"
-BUILD_NUMBER="${2:-2}"
+VERSION="${1:-0.1.3}"
+BUILD_NUMBER="${2:-3}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PRODUCTS="$ROOT/.build/apple/Products/Release"
 DIST="$ROOT/dist"

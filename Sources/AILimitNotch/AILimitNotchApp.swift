@@ -53,9 +53,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func showNotch() {
         if panel == nil {
             let panel = NotchPanel()
-            let content = NotchView(settings: .shared, state: notchState) { [weak panel] isExpanded in
-                panel?.setExpanded(isExpanded)
-            }
+            let content = NotchView(
+                settings: .shared,
+                state: notchState,
+                onExpansionChanged: { [weak panel] isExpanded in
+                    panel?.setExpanded(isExpanded)
+                },
+                onExpandedHeightChanged: { [weak panel] height in
+                    panel?.setExpandedContentHeight(height)
+                }
+            )
             let hostingView = NSHostingView(rootView: content)
             hostingView.sizingOptions = []
             hostingView.frame = NSRect(origin: .zero, size: NotchPanel.compactSize)
@@ -125,14 +132,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 @MainActor
 final class NotchPanel: NSPanel {
-    static var compactSize: NSSize {
-        let count = max(1, AppSettings.shared.miniProviders.count)
-        return NSSize(width: CGFloat(18 + count * 54), height: 20)
-    }
-    static let expandedSize = NSSize(width: 430, height: 360)
-    static let topOffset: CGFloat = 30
+    static let compactSize = NSSize(width: 184, height: 30)
+    static let expandedWidth: CGFloat = 430
+    static let compactTopOffset: CGFloat = 20
+    static let expandedTopOffset: CGFloat = 30
 
-    private var isAnimatingFrame = false
+    private var frameAnimationID = 0
+    private var expandedContentHeight: CGFloat = 180
 
     init() {
         super.init(
@@ -161,31 +167,42 @@ final class NotchPanel: NSPanel {
         let size = frame.size
         let origin = NSPoint(
             x: screen.frame.midX - size.width / 2,
-            y: screen.frame.maxY - size.height - Self.topOffset
+            y: screen.frame.maxY - size.height - topOffset(for: size)
         )
         setFrameOrigin(origin)
     }
 
     func setExpanded(_ expanded: Bool) {
-        guard !isAnimatingFrame else { return }
-        guard let screen = preferredScreen() else { return }
-        isAnimatingFrame = true
-        let size = expanded ? Self.expandedSize : Self.compactSize
-        let target = NSRect(
-            x: screen.frame.midX - size.width / 2,
-            y: screen.frame.maxY - size.height - Self.topOffset,
-            width: size.width,
-            height: size.height
+        let size = expanded
+            ? NSSize(width: Self.expandedWidth, height: expandedContentHeight)
+            : Self.compactSize
+        animateFrame(to: size, duration: 0.42)
+    }
+
+    func setExpandedContentHeight(_ height: CGFloat) {
+        let measuredHeight = max(60, ceil(height))
+        guard abs(measuredHeight - expandedContentHeight) >= 1 else { return }
+        expandedContentHeight = measuredHeight
+        guard NotchState.shared.isExpanded else { return }
+        animateFrame(
+            to: NSSize(width: Self.expandedWidth, height: measuredHeight),
+            duration: 0.24
         )
+    }
+
+    private func animateFrame(to size: NSSize, duration: TimeInterval) {
+        frameAnimationID += 1
+        let animationID = frameAnimationID
+        let target = targetFrame(for: size)
 
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.42
+            context.duration = duration
             context.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 0.9, 0.25, 1)
             animator().setFrame(target, display: true)
         } completionHandler: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                self.isAnimatingFrame = false
+                guard self.frameAnimationID == animationID else { return }
                 self.contentView?.needsDisplay = true
                 self.contentView?.displayIfNeeded()
                 self.invalidateShadow()
@@ -202,10 +219,16 @@ final class NotchPanel: NSPanel {
         guard let screen = preferredScreen() else { return NSRect(origin: frame.origin, size: size) }
         return NSRect(
             x: screen.frame.midX - size.width / 2,
-            y: screen.frame.maxY - size.height - Self.topOffset,
+            y: screen.frame.maxY - size.height - topOffset(for: size),
             width: size.width,
             height: size.height
         )
+    }
+
+    private func topOffset(for size: NSSize) -> CGFloat {
+        size.width == Self.compactSize.width
+            ? Self.compactTopOffset
+            : Self.expandedTopOffset
     }
 
     private func preferredScreen() -> NSScreen? {

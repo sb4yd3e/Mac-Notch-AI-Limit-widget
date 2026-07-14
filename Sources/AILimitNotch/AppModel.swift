@@ -56,6 +56,13 @@ enum ProviderID: String, CaseIterable, Identifiable, Codable {
         case .antigravity, .cursor: nil
         }
     }
+
+    var miniMetricID: String {
+        switch self {
+        case .codex: "week"
+        case .claudeCode, .antigravity, .cursor: "5h"
+        }
+    }
 }
 
 enum ServerStatus: Sendable {
@@ -106,6 +113,13 @@ final class AppSettings: ObservableObject {
     @Published var colorMode: String {
         didSet { save() }
     }
+    @Published var autoWakeClaudeWhenUnavailable: Bool {
+        didSet {
+            save()
+            guard !isLoading, autoWakeClaudeWhenUnavailable else { return }
+            UsageStore.shared.refresh()
+        }
+    }
 
     private let defaults = UserDefaults.standard
     private var isLoading = true
@@ -119,6 +133,7 @@ final class AppSettings: ObservableObject {
         providerOrder = savedOrder + ProviderID.allCases.filter { !savedOrder.contains($0) }
         miniItemCount = min(3, max(1, defaults.object(forKey: "miniItemCount") as? Int ?? 2))
         colorMode = defaults.string(forKey: "colorMode") ?? "color"
+        autoWakeClaudeWhenUnavailable = defaults.bool(forKey: "autoWakeClaudeWhenUnavailable")
         isLoading = false
     }
 
@@ -164,6 +179,7 @@ final class AppSettings: ObservableObject {
         defaults.set(providerOrder.map(\.rawValue), forKey: "providerOrder")
         defaults.set(miniItemCount, forKey: "miniItemCount")
         defaults.set(colorMode, forKey: "colorMode")
+        defaults.set(autoWakeClaudeWhenUnavailable, forKey: "autoWakeClaudeWhenUnavailable")
     }
 }
 
@@ -179,6 +195,7 @@ final class UsageStore: ObservableObject {
 
     @Published private(set) var liveLimits: [ProviderID: [LimitMetric]] = [:]
     private var timer: Timer?
+    private var isRefreshing = false
 
     private init() {
         refresh()
@@ -196,11 +213,14 @@ final class UsageStore: ObservableObject {
     }
 
     func refresh() {
+        guard !isRefreshing else { return }
+        isRefreshing = true
         Task.detached(priority: .utility) {
             let codex = Self.readLatestCodexLimits()
             let claude = Self.readClaudeStatusLineCache()
             await MainActor.run { [weak self] in
                 self?.apply(codex: codex, claude: claude)
+                self?.isRefreshing = false
             }
         }
     }
@@ -210,6 +230,14 @@ final class UsageStore: ObservableObject {
         liveLimits[.claudeCode] = claude
         liveLimits.removeValue(forKey: .antigravity)
         liveLimits.removeValue(forKey: .cursor)
+
+        let settings = AppSettings.shared
+        let hasClaudeFiveHour = claude?.contains(where: { $0.id == "5h" }) == true
+        if settings.autoWakeClaudeWhenUnavailable,
+           settings.isEnabled(.claudeCode),
+           !hasClaudeFiveHour {
+            ClaudeWakeController.shared.wakeIfNeeded()
+        }
     }
 
     private nonisolated static func readLatestCodexLimits() -> [LimitMetric]? {
@@ -239,7 +267,7 @@ final class UsageStore: ObservableObject {
         // Tail read may start mid-character; decode lossily so a split UTF-8 byte doesn't drop the whole file.
         let text = String(decoding: data, as: UTF8.self)
 
-        var found: [String: LimitMetric] = [:]
+        var weeklyLimit: LimitMetric?
         for line in text.split(separator: "\n").reversed().prefix(800) {
             guard let lineData = line.data(using: .utf8),
                   let root = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
@@ -250,40 +278,137 @@ final class UsageStore: ObservableObject {
                 guard let window = limits[key] as? [String: Any],
                       let used = (window["used_percent"] as? NSNumber)?.doubleValue,
                       let minutes = (window["window_minutes"] as? NSNumber)?.intValue else { continue }
-                let id = minutes <= 300 ? "5h" : "week"
-                guard found[id] == nil else { continue }
-                found[id] = LimitMetric(
-                    id: id,
-                    label: id == "5h" ? "5-hour limit" : "Weekly limit",
+                guard minutes > 300, weeklyLimit == nil else { continue }
+                weeklyLimit = LimitMetric(
+                    id: "week",
+                    label: "Weekly limit",
                     usedPercent: min(100, max(0, Int(used.rounded()))),
                     resetText: resetText(window["resets_at"])
                 )
             }
-            if found.count == 2 { break }
+            if weeklyLimit != nil { break }
         }
-        let result = [found["5h"], found["week"]].compactMap { $0 }
-        return result.isEmpty ? nil : result
+        return weeklyLimit.map { [$0] }
+    }
+
+    private struct ClaudeLimitWindow: Equatable {
+        let source: String
+        let id: String
+        let label: String
+        let usedPercentage: Double
+        let resetsAt: Double?
+
+        var metric: LimitMetric {
+            LimitMetric(
+                id: id,
+                label: label,
+                usedPercent: min(100, max(0, Int(usedPercentage.rounded()))),
+                resetText: resetText(resetsAt)
+            )
+        }
     }
 
     private nonisolated static func readClaudeStatusLineCache() -> [LimitMetric]? {
-        let url = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/AILimitNotch/claude-usage.json")
+        let directory = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/AILimitNotch", isDirectory: true)
+        let liveURL = directory.appendingPathComponent("claude-usage.json")
+        let commandURL = directory.appendingPathComponent("claude-usage-command.json")
+        let fallbackURL = directory.appendingPathComponent("claude-usage-last-good.json")
+
+        // Claude Code omits rate_limits before the first API response and may omit
+        // either window independently. Preserve only still-valid official values.
+        var windows = readClaudeWindows(from: fallbackURL, requireFutureReset: true)
+        var latestWindows: [String: ClaudeLimitWindow] = [:]
+        let liveURLs = [liveURL, commandURL].sorted {
+            modificationDate(of: $0) < modificationDate(of: $1)
+        }
+        for url in liveURLs {
+            for (source, window) in readClaudeWindows(from: url, requireFutureReset: false) {
+                latestWindows[source] = window
+            }
+        }
+        for (source, window) in latestWindows {
+            windows[source] = window
+        }
+
+        if !latestWindows.isEmpty {
+            persistClaudeWindows(windows, to: fallbackURL)
+        }
+
+        let orderedSources = ["five_hour", "seven_day"]
+        let result = orderedSources.compactMap { windows[$0]?.metric }
+        return result.isEmpty ? nil : result
+    }
+
+    private nonisolated static func modificationDate(of url: URL) -> Date {
+        (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+            ?? .distantPast
+    }
+
+    private nonisolated static func readClaudeWindows(
+        from url: URL,
+        requireFutureReset: Bool
+    ) -> [String: ClaudeLimitWindow] {
         guard let data = try? Data(contentsOf: url),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let rateLimits = root["rate_limits"] as? [String: Any] else { return nil }
+              let rateLimits = root["rate_limits"] as? [String: Any] else { return [:] }
 
         let definitions = [("five_hour", "5h", "5-hour limit"), ("seven_day", "week", "Weekly limit")]
-        let result: [LimitMetric] = definitions.compactMap { source, id, label in
+        let now = Date().timeIntervalSince1970
+        var result: [String: ClaudeLimitWindow] = [:]
+
+        for (source, id, label) in definitions {
             guard let window = rateLimits[source] as? [String: Any],
-                  let used = (window["used_percentage"] as? NSNumber)?.doubleValue else { return nil }
-            return LimitMetric(
+                  let used = (window["used_percentage"] as? NSNumber)?.doubleValue,
+                  used.isFinite else { continue }
+            let resetsAt = (window["resets_at"] as? NSNumber)?.doubleValue
+            if let resetsAt, resetsAt <= now { continue }
+            if requireFutureReset, resetsAt == nil { continue }
+            result[source] = ClaudeLimitWindow(
+                source: source,
                 id: id,
                 label: label,
-                usedPercent: min(100, max(0, Int(used.rounded()))),
-                resetText: resetText(window["resets_at"])
+                usedPercentage: used,
+                resetsAt: resetsAt
             )
         }
-        return result.isEmpty ? nil : result
+        return result
+    }
+
+    private nonisolated static func persistClaudeWindows(
+        _ windows: [String: ClaudeLimitWindow],
+        to url: URL
+    ) {
+        let now = Date().timeIntervalSince1970
+        let validWindows = windows.values.filter { window in
+            guard let resetsAt = window.resetsAt else { return false }
+            return resetsAt > now
+        }
+        guard !validWindows.isEmpty else { return }
+        let validBySource = Dictionary(uniqueKeysWithValues: validWindows.map { ($0.source, $0) })
+        let existing = readClaudeWindows(from: url, requireFutureReset: true)
+        guard existing != validBySource else { return }
+
+        let rateLimits = Dictionary(uniqueKeysWithValues: validWindows.map { window in
+            (
+                window.source,
+                [
+                    "used_percentage": window.usedPercentage,
+                    "resets_at": window.resetsAt as Any
+                ] as [String: Any]
+            )
+        })
+        let payload: [String: Any] = [
+            "saved_at": now,
+            "rate_limits": rateLimits
+        ]
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try? data.write(to: url, options: .atomic)
     }
 
     private nonisolated static func resetText(_ raw: Any?) -> String? {

@@ -85,6 +85,13 @@ struct SettingsView: View {
                 .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
             }
 
+            Toggle(
+                "Refresh Claude usage when unavailable",
+                isOn: $settings.autoWakeClaudeWhenUnavailable
+            )
+            .disabled(!settings.isEnabled(.claudeCode))
+            .help("Runs claude -p \"/usage\" at most once every 30 minutes. The built-in usage command does not call the model or consume tokens.")
+
             Spacer()
         }
     }

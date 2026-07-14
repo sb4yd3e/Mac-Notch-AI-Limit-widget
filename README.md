@@ -1,6 +1,6 @@
 # AI Limit Notch
 
-A compact, native macOS Notch overlay for monitoring AI coding-provider limits. The mini view shows provider logos and live 5-hour usage percentages; click it to expand into the available 5-hour and weekly limits.
+A compact, native macOS Notch overlay for monitoring AI coding-provider limits. The mini view shows Claude Code's live 5-hour usage and Codex's weekly usage; click it to expand into the available limits.
 
 ## Preview
 
@@ -19,7 +19,7 @@ A compact, native macOS Notch overlay for monitoring AI coding-provider limits. 
 ## Features
 
 - Native SwiftUI and AppKit interface for macOS 13+
-- 20 px mini Notch with support for 1–3 providers
+- 184 × 30 px mini Notch with support for 1–3 providers
 - Expandable provider-limit dashboard
 - Claude Code and Codex support
 - Provider enable/disable controls and custom display order
@@ -34,7 +34,7 @@ A compact, native macOS Notch overlay for monitoring AI coding-provider limits. 
 | Provider | Status | Data source |
 | --- | --- | --- |
 | Claude Code | Supported | Claude Code `statusLine` JSON cache |
-| Codex | Supported | Latest local Codex session rate-limit cache |
+| Codex | Supported | Latest local Codex weekly rate-limit cache |
 | Antigravity | Planned | Collector prepared |
 | Cursor | Planned | Collector prepared |
 
@@ -54,6 +54,10 @@ Claude Code reads the official `rate_limits.five_hour` and `rate_limits.seven_da
 ```
 
 The configured Claude Code status-line command should copy the JSON it receives on standard input to this file. No OAuth token is copied or exported.
+
+Claude Code may omit `rate_limits` before the first API response or omit either limit window independently. The app preserves the last valid value for each window locally and automatically discards it after its official `resets_at` time.
+
+The optional Claude refresh setting runs the built-in `claude -p "/usage"` command at most once every 30 minutes when the 5-hour limit is unavailable. The command reports zero model cost, and the app stores only the parsed 5-hour and weekly values in its local cache. The setting is disabled by default.
 
 ## Requirements
 
