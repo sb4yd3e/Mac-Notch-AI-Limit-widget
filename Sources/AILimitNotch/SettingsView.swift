@@ -104,6 +104,14 @@ struct SettingsView: View {
             }
             .pickerStyle(.segmented)
 
+            HStack(spacing: 10) {
+                Text("Mini opacity")
+                Slider(value: $settings.miniOpacity, in: 0.2...1, step: 0.05)
+                Text("\(Int((settings.miniOpacity * 100).rounded()))%")
+                    .monospacedDigit()
+                    .frame(width: 38, alignment: .trailing)
+            }
+
             Stepper("Items in mini Notch: \(settings.miniItemCount)", value: $settings.miniItemCount, in: 1...3)
 
             Text("Provider order")

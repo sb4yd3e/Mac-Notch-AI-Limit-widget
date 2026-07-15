@@ -113,6 +113,9 @@ final class AppSettings: ObservableObject {
     @Published var colorMode: String {
         didSet { save() }
     }
+    @Published var miniOpacity: Double {
+        didSet { save() }
+    }
     @Published var autoWakeClaudeWhenUnavailable: Bool {
         didSet {
             save()
@@ -133,6 +136,8 @@ final class AppSettings: ObservableObject {
         providerOrder = savedOrder + ProviderID.allCases.filter { !savedOrder.contains($0) }
         miniItemCount = min(3, max(1, defaults.object(forKey: "miniItemCount") as? Int ?? 2))
         colorMode = defaults.string(forKey: "colorMode") ?? "color"
+        let savedOpacity = defaults.object(forKey: "miniOpacity") as? Double ?? 1
+        miniOpacity = min(1, max(0.2, savedOpacity))
         autoWakeClaudeWhenUnavailable = defaults.bool(forKey: "autoWakeClaudeWhenUnavailable")
         isLoading = false
     }
@@ -179,6 +184,7 @@ final class AppSettings: ObservableObject {
         defaults.set(providerOrder.map(\.rawValue), forKey: "providerOrder")
         defaults.set(miniItemCount, forKey: "miniItemCount")
         defaults.set(colorMode, forKey: "colorMode")
+        defaults.set(miniOpacity, forKey: "miniOpacity")
         defaults.set(autoWakeClaudeWhenUnavailable, forKey: "autoWakeClaudeWhenUnavailable")
     }
 }

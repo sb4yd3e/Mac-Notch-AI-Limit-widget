@@ -13,7 +13,7 @@ struct NotchView: View {
     var body: some View {
         ZStack(alignment: .top) {
             NotchShape(radius: state.isExpanded ? 18 : 8)
-                .fill(Color.black)
+                .fill(Color.black.opacity(state.isExpanded ? 1 : settings.miniOpacity))
 
             if state.isExpanded {
                 expandedContent
@@ -67,7 +67,6 @@ struct NotchView: View {
         }
         .frame(maxWidth: .infinity, alignment: .center)
         .padding(.top, 12)
-        .background(Color.black)
     }
 
     private var expandedContent: some View {

@@ -24,6 +24,7 @@ A compact, native macOS Notch overlay for monitoring AI coding-provider limits. 
 - Claude Code and Codex support
 - Provider enable/disable controls and custom display order
 - Color and Black & White appearance modes
+- Adjustable mini Notch background opacity
 - Thai and English language settings
 - Collapse automatically when clicking outside the Notch
 - Launch at Login using `SMAppService`
